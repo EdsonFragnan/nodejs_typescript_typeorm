@@ -1,0 +1,134 @@
+Actually if you search, there are many references out there.
+
+In the following, I share a few ways that I know.
+
+One of the big conceptual leaps to testing Express applications with mocked request/response is understanding how to mock a chained
+
+API eg. res.status(200).json({ foo: 'bar' }).
+
+First you can make some kind of interceptor, this is achieved by returning the res instance from each of its methods:
+
+// util/interceptor.js
+module.exports = {
+  mockRequest: () => {
+    const req = {}
+    req.body = jest.fn().mockReturnValue(req)
+    req.params = jest.fn().mockReturnValue(req)
+    return req
+  },
+
+  mockResponse: () => {
+    const res = {}
+    res.send = jest.fn().mockReturnValue(res)
+    res.status = jest.fn().mockReturnValue(res)
+    res.json = jest.fn().mockReturnValue(res)
+    return res
+  },
+  // mockNext: () => jest.fn()
+}
+The Express user-land API is based around middleware. AN middleware that takes a request (usually called req), a response (usually called res ) and a next (call next middleware) as parameters.
+
+And then you have controller like this :
+
+// todoController.js
+function todoController (req, res) {
+    if (!req.params.id) {
+      return res.status(404).json({ message: 'Not Found' });
+    }
+
+    res.send('Hello i am todo controller')
+}
+They are consumed by being “mounted” on an Express application (app) instance (in app.js):
+
+// app.js
+const express = require('express');
+const app = express();
+
+const todoController = require('./todoController');
+
+app.get('/todo', todoController);
+Using the mockRequest and mockResponse we’ve defined before, then we’ll asume that res.send() is called with the right payload ({ data }).
+
+So on your test file :
+
+// todo.spec.js
+const { mockRequest, mockResponse } = require('util/interceptor')
+const controller = require('todoController.js')
+
+describe("Check method \'todoController\' ", () => {
+  test('should 200 and return correct value', async () => {
+    let req = mockRequest();
+    req.params.id = 1;
+    const res = mockResponse();
+
+    await controller.todoController(req, res);
+
+    expect(res.send).toHaveBeenCalledTimes(1)
+    expect(res.send.mock.calls.length).toBe(1);
+    expect(res.send).toHaveBeenCalledWith('Hello i am todo controller');
+  });
+
+  test('should 404 and return correct value', async () => {
+    let req = mockRequest();
+    req.params.id = null;
+    const res = mockResponse();
+
+    await controller.todoController(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Not Found' });
+  });
+});
+
+
+---------------
+
+mport { Request, Response, NextFunction } from 'express';
+import { Foo } from '../../src/models/Foo';
+import * as fooController from '../../src/controllers/foo';
+import { doesNotReject } from 'assert';
+
+describe('createFoo', async () => {
+  it('should add bars to the foo', async () => {
+    /**
+     * Spy on the model save function and return a completed promise.
+     * We are not testing the model here, only the controller so this is ok.
+     */
+    jest.spyOn(Foo.prototype, 'save').mockImplementationOnce(() => Promise.resolve());
+
+    /**
+     * Create a mock request and set type to any to tell typescript to ignore type checking
+     */
+    const mockRequest: any = {
+      user: {
+        _id: 1234,
+      },
+      body: {
+        bars: ['baz', 'qux', 'quux'],
+      },
+    };
+
+    /**
+     * Create a mock repsonse with only the methods that are called in the controller and
+     * record their output with jest.fn()
+     */
+    const mockResponse: any = {
+      status: jest.fn(),
+      json: jest.fn(),
+    };
+
+    /**
+     * Create a mock next function. It is okay to set its type to Express's NextFunction because
+     * we are mocking the entire function.
+     */
+    const mockNext: NextFunction = jest.fn();
+
+    await fooController.createFoo(mockRequest, mockResponse, mockNext);
+
+    expect(mockResponse.json).toHaveBeenCalledTimes(1);
+    expect(mockResponse.json).toHaveBeenCalledWith('bars');
+
+    expect(mockResponse.status).toHaveBeenCalledTimes(1);
+    expect(mockResponse.status).toHaveBeenCalledWith(200);
+  });
+});
